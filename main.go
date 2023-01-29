@@ -1,13 +1,11 @@
 package main
 
 import (
-	"os"
-
 	"go-nosql-db/pkg/engine"
 )
 
 func main() {
-	_, err := engine.NewDal("test.db", uint(os.Getpagesize()))
+	_, err := engine.NewDal("test.db")
 	panicOnError(err)
 }
 

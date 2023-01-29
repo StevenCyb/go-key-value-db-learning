@@ -66,6 +66,7 @@
     "nilnil",
     "nlreturn",
     "noctx",
+    "nolint",
     "nolintlint",
     "nonamedreturns",
     "nosprintfhostport",
