@@ -261,3 +261,188 @@ func (n *node) split(nodeToSplit *node, nodeToSplitIndex int) error {
 
 	return nil
 }
+
+// removeItemFromLeaf removes an item from a leaf node. It means there is no handling of child nodes.
+func (n *node) removeItemFromLeaf(index int) error {
+	n.items = append(n.items[:index], n.items[index+1:]...)
+
+	if _, err := n.dal.writeNode(n); err != nil {
+		return fmt.Errorf("failed to write node: %w", err)
+	}
+
+	return nil
+}
+
+// removeItemFromInternal take element before in order (The biggest element from the left branch), put it in the removed
+// index and remove it from the original node. Track in affectedNodes any nodes in the path leading to that node.
+// It will be used in case the tree needs to be rebalanced.
+func (n *node) removeItemFromInternal(index int) ([]int, error) {
+	affectedNodes := make([]int, 0)
+	affectedNodes = append(affectedNodes, index)
+
+	aNode, err := n.dal.getNode(n.childNodes[index])
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node: %w", err)
+	}
+
+	for !aNode.isLeaf() {
+		traversingIndex := len(n.childNodes) - 1
+
+		aNode, err = aNode.dal.getNode(aNode.childNodes[traversingIndex])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get node: %w", err)
+		}
+
+		affectedNodes = append(affectedNodes, traversingIndex)
+	}
+
+	n.items[index] = aNode.items[len(aNode.items)-1]
+	aNode.items = aNode.items[:len(aNode.items)-1]
+
+	if err := n.dal.writeNodes(n, aNode); err != nil {
+		return nil, fmt.Errorf("failed to write nodes: %w", err)
+	}
+
+	return affectedNodes, nil
+}
+
+// rotateRight rotates the nodes to right to balance the B-Tree.
+/*	         p                              p
+ *         /   4                          /   3
+ *	      /     \           ------>      /     \
+ *	   a      b (unbalanced)            a     b (unbalanced)
+ *   1,2,3         5                   1,2       4,5.
+ */
+func rotateRight(aNode, pNode, bNode *node, bNodeIndex int) {
+	aNodeItem := aNode.items[len(aNode.items)-1]
+	aNode.items = aNode.items[:len(aNode.items)-1]
+
+	pNodeItemIndex := bNodeIndex - 1
+	if bNodeIndex == 0 {
+		pNodeItemIndex = 0
+	}
+
+	pNodeItem := pNode.items[pNodeItemIndex]
+	pNode.items[pNodeItemIndex] = aNodeItem
+
+	bNode.items = append([]*item{pNodeItem}, bNode.items...)
+
+	if !aNode.isLeaf() {
+		childNodeToShift := aNode.childNodes[len(aNode.childNodes)-1]
+		aNode.childNodes = aNode.childNodes[:len(aNode.childNodes)-1]
+		bNode.childNodes = append([]uint64{childNodeToShift}, bNode.childNodes...)
+	}
+}
+
+// rotateLeft rotates the nodes to left to balance the B-Tree.
+/* 	         p                                 p
+ *         /   2                             /   3
+ *	      /      \           ------>        /      \
+ *  a(unbalanced)  b                 a(unbalanced)   b
+ *   1           3,4,5                   1,2        4,5.
+ */
+func rotateLeft(aNode, pNode, bNode *node, bNodeIndex int) {
+	bNodeItem := bNode.items[0]
+	bNode.items = bNode.items[1:]
+	pNodeItemIndex := bNodeIndex
+
+	if bNodeIndex == len(pNode.items) {
+		pNodeItemIndex = len(pNode.items) - 1
+	}
+
+	pNodeItem := pNode.items[pNodeItemIndex]
+	pNode.items[pNodeItemIndex] = bNodeItem
+
+	aNode.items = append(aNode.items, pNodeItem)
+
+	if !bNode.isLeaf() {
+		childNodeToShift := bNode.childNodes[0]
+		bNode.childNodes = bNode.childNodes[1:]
+		aNode.childNodes = append(aNode.childNodes, childNodeToShift)
+	}
+}
+
+// merge merges node if rotation is not possible.
+/* 	          p                              p
+ *         / 3,5 \                         /   5
+ *	      /   |   \       ------>         /     \
+ *       a   	b    c                     a       c
+ *     1,2    4   6,7                 1,2,3,4   6,7.
+ */
+func (n *node) merge(bNode *node, bNodeIndex int) error {
+	aNode, err := n.dal.getNode(n.childNodes[bNodeIndex-1])
+	if err != nil {
+		return fmt.Errorf("failed to get node: %w", err)
+	}
+
+	pNodeItem := n.items[bNodeIndex-1]
+	n.items = append(n.items[:bNodeIndex-1], n.items[bNodeIndex:]...)
+	aNode.items = append(aNode.items, pNodeItem)
+	aNode.items = append(aNode.items, bNode.items...)
+	n.childNodes = append(n.childNodes[:bNodeIndex], n.childNodes[bNodeIndex+1:]...)
+
+	if !aNode.isLeaf() {
+		aNode.childNodes = append(aNode.childNodes, bNode.childNodes...)
+	}
+
+	if err = n.dal.writeNodes(aNode, n); err != nil {
+		return fmt.Errorf("failed to write node: %w", err)
+	}
+
+	n.dal.deleteNode(bNode.pageNumber)
+
+	return nil
+}
+
+// rebalanceRemove rebalance the tree after a remove operation. This can be either by rotating to the right, to the
+// left or by merging. First, the sibling nodes are checked to see if they have enough items for rebalancing
+// (>= minItems+1). If they don't have enough items, then merging with one of the sibling nodes occurs. This may leave
+// the parent unbalanced by having too little items so rebalancing has to be checked for all the ancestors.
+func (n *node) rebalanceRemove(unbalancedNode *node, unbalancedNodeIndex int) error { //nolint:cyclop
+	pNode := n
+
+	if unbalancedNodeIndex != 0 {
+		leftNode, err := n.dal.getNode(pNode.childNodes[unbalancedNodeIndex-1])
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		if n.dal.getSplitIndex(leftNode) != -1 {
+			rotateRight(leftNode, pNode, unbalancedNode, unbalancedNodeIndex)
+
+			if err = n.dal.writeNodes(leftNode, pNode, unbalancedNode); err != nil {
+				return fmt.Errorf("failed to write node: %w", err)
+			}
+
+			return nil
+		}
+	}
+
+	if unbalancedNodeIndex != len(pNode.childNodes)-1 {
+		rightNode, err := n.dal.getNode(pNode.childNodes[unbalancedNodeIndex+1])
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		if n.dal.getSplitIndex(rightNode) != -1 {
+			rotateLeft(unbalancedNode, pNode, rightNode, unbalancedNodeIndex)
+
+			if err = n.dal.writeNodes(unbalancedNode, pNode, rightNode); err != nil {
+				return fmt.Errorf("failed to write node: %w", err)
+			}
+
+			return nil
+		}
+	}
+
+	if unbalancedNodeIndex == 0 {
+		rightNode, err := n.dal.getNode(n.childNodes[unbalancedNodeIndex+1])
+		if err != nil {
+			return fmt.Errorf("failed to get node: %w", err)
+		}
+
+		return pNode.merge(rightNode, unbalancedNodeIndex+1)
+	}
+
+	return pNode.merge(unbalancedNode, unbalancedNodeIndex)
+}
