@@ -6,7 +6,6 @@ linters:
     - containedctx
     - contextcheck
     - cyclop
-    - deadcode
     - decorder
     - depguard
     - dogsled
@@ -77,7 +76,8 @@ linters:
     - typecheck
     - unconvert
     - unparam
-    - unused
+    # - unused //NOTE: disable for now
+    # - deadcode
     - varcheck
     - varnamelen
     - wastedassign

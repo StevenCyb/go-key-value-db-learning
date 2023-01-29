@@ -21,12 +21,16 @@ func newEmptyMeta() *meta {
  */
 type meta struct {
 	freelistPageNumber uint64
+	rootPageNumber     uint64
 }
 
 // serialize given byte array.
 func (m *meta) serialize(buffer []byte) {
 	pos := 0
 
+	binary.LittleEndian.PutUint64(buffer[pos:], m.rootPageNumber)
+
+	pos += pageNumberSize
 	binary.LittleEndian.PutUint64(buffer[pos:], m.freelistPageNumber)
 }
 
@@ -34,5 +38,8 @@ func (m *meta) serialize(buffer []byte) {
 func (m *meta) deserialize(buf []byte) {
 	pos := 0
 
+	m.rootPageNumber = binary.LittleEndian.Uint64(buf[pos:])
+
+	pos += pageNumberSize
 	m.freelistPageNumber = binary.LittleEndian.Uint64(buf[pos:])
 }

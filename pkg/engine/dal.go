@@ -162,3 +162,43 @@ func (d *DAL) writeFreelist() (*page, error) {
 
 	return freelistPage, nil
 }
+
+// getNode returns a node with given page number.
+func (d *DAL) getNode(pageNumber uint64) (*node, error) {
+	nodePage, err := d.readPage(pageNumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read node page from page %d: %w", pageNumber, err)
+	}
+
+	node := newEmptyNode()
+	node.deserialize(nodePage.data)
+	node.pageNumber = pageNumber
+
+	return node, nil
+}
+
+// writeNode writes a node to file.
+func (d *DAL) writeNode(nodeToWrite *node) (*node, error) {
+	nodePage := d.allocateEmptyPage()
+
+	if nodeToWrite.pageNumber == 0 {
+		nodePage.number = d.getNextPage()
+		nodeToWrite.pageNumber = nodePage.number
+	} else {
+		nodePage.number = nodeToWrite.pageNumber
+	}
+
+	nodePage.data = nodeToWrite.serialize(nodePage.data)
+
+	err := d.writePage(*nodePage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write node page to file: %w", err)
+	}
+
+	return nodeToWrite, nil
+}
+
+// deleteNode delete a node on page with given number.
+func (d *DAL) deleteNode(pageNumber uint64) {
+	d.releasePage(pageNumber)
+}
