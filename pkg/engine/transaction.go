@@ -22,7 +22,7 @@ type Transaction struct {
 	write                bool
 }
 
-func (t *Transaction) newNode(items []*item, childNodes []uint64) *node {
+func (t *Transaction) newNode(items []*Item, childNodes []uint64) *node {
 	newNode := newEmptyNode()
 	newNode.items = items
 	newNode.childNodes = childNodes
@@ -96,7 +96,7 @@ func (t *Transaction) Commit() error {
 	}
 
 	for _, node := range t.dirtyNodes {
-		if err := t.db.writeNode(node); err != nil {
+		if _, err := t.db.writeNode(node); err != nil {
 			return fmt.Errorf("failed to write dirty node to file: %w", err)
 		}
 	}
@@ -116,4 +116,73 @@ func (t *Transaction) Commit() error {
 	t.db.rwlock.Unlock()
 
 	return nil
+}
+
+func (t *Transaction) getRootCollection() *Collection {
+	rootCollection := &Collection{}
+	rootCollection.root = t.db.dal.rootPageNumber
+	rootCollection.tx = t
+
+	return rootCollection
+}
+
+// GetCollection returns collection by name.
+func (t *Transaction) GetCollection(name []byte) (*Collection, error) {
+	rootCollection := t.getRootCollection()
+
+	item, err := rootCollection.Find(name)
+	if err != nil {
+		return nil, err
+	}
+
+	if item == nil {
+		return nil, nil //nolint:nilnil
+	}
+
+	collection := &Collection{}
+
+	collection.deserialize(item)
+
+	collection.tx = t
+
+	return collection, nil
+}
+
+func (t *Transaction) CreateCollection(name []byte) (*Collection, error) {
+	if !t.write {
+		return nil, ErrWriteInsideReadTx
+	}
+
+	newCollectionPage, err := t.db.dal.writeNode(newEmptyNode())
+	if err != nil {
+		return nil, err
+	}
+
+	newCollection := &Collection{}
+	newCollection.name = name
+	newCollection.root = newCollectionPage.number
+
+	return t.createCollection(newCollection)
+}
+
+func (t *Transaction) createCollection(collection *Collection) (*Collection, error) {
+	collection.tx = t
+	collectionBytes := collection.serialize()
+	rootCollection := t.getRootCollection()
+
+	if err := rootCollection.Put(collection.name, collectionBytes.value); err != nil {
+		return nil, err
+	}
+
+	return collection, nil
+}
+
+func (t *Transaction) DeleteCollection(name []byte) error {
+	if !t.write {
+		return ErrWriteInsideReadTx
+	}
+
+	rootCollection := t.getRootCollection()
+
+	return rootCollection.Remove(name)
 }

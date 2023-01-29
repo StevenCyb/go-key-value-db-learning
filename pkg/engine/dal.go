@@ -182,7 +182,7 @@ func (d *dal) getNode(pageNumber uint64) (*node, error) {
 }
 
 // newNode creates a new node with given items and child nodes.
-func (d *dal) newNode(items []*item, childNodes []uint64) *node {
+func (d *dal) newNode(items []*Item, childNodes []uint64) *node {
 	newNode := newEmptyNode()
 
 	newNode.items = items
@@ -194,7 +194,7 @@ func (d *dal) newNode(items []*item, childNodes []uint64) *node {
 }
 
 // writeNode writes a node to file.
-func (d *dal) writeNode(nodeToWrite *node) error {
+func (d *dal) writeNode(nodeToWrite *node) (*page, error) {
 	nodePage := d.allocateEmptyPage()
 
 	if nodeToWrite.pageNumber == 0 {
@@ -208,16 +208,16 @@ func (d *dal) writeNode(nodeToWrite *node) error {
 
 	err := d.writePage(*nodePage)
 	if err != nil {
-		return fmt.Errorf("failed to write node page to file: %w", err)
+		return nil, fmt.Errorf("failed to write node page to file: %w", err)
 	}
 
-	return nil
+	return nodePage, nil
 }
 
 // writeNodes writes all given nodes to file.
 func (d *dal) writeNodes(nodesToWrite ...*node) error {
 	for i, nodeToWrite := range nodesToWrite {
-		if err := d.writeNode(nodeToWrite); err != nil {
+		if _, err := d.writeNode(nodeToWrite); err != nil {
 			return fmt.Errorf("failed to write nodes (on index %d): %w", i, err)
 		}
 	}

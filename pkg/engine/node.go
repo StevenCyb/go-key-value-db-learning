@@ -12,22 +12,22 @@ const (
 	nodeHeaderSize = 3
 )
 
-// newItem creates a new item object with given key, value pairs.
-func newItem(key []byte, value []byte) *item {
-	return &item{
+// NewItem creates a new item object with given key, value pairs.
+func NewItem(key []byte, value []byte) *Item {
+	return &Item{
 		key:   key,
 		value: value,
 	}
 }
 
-// item is a key, value pair in B-Tree node.
-type item struct {
+// Item is a key, value pair in B-Tree node.
+type Item struct {
 	key   []byte
 	value []byte
 }
 
 // size returns the size of the items in bytes.
-func (i item) size() int {
+func (i Item) size() int {
 	return len(i.key) + len(i.value)
 }
 
@@ -41,7 +41,7 @@ type node struct {
 	dal        *dal
 	tx         *Transaction
 	childNodes []uint64
-	items      []*item
+	items      []*Item
 	pageNumber uint64
 }
 
@@ -132,7 +132,7 @@ func (n *node) deserialize(buffer []byte) {
 		offset += byteOffset
 
 		value := buffer[offset : offset+valueCount]
-		n.items = append(n.items, newItem(key, value))
+		n.items = append(n.items, NewItem(key, value))
 	}
 
 	if isLeaf == 0 {
@@ -208,15 +208,13 @@ func (n *node) size() int {
 	return size
 }
 
-func (n *node) addItem(newItem *item, insertionIndex int) int {
+func (n *node) addItem(newItem *Item, insertionIndex int) {
 	if len(n.items) == insertionIndex {
 		n.items = append(n.items, newItem)
 	} else {
 		n.items = append(n.items[:insertionIndex+1], n.items[insertionIndex:]...)
 		n.items[insertionIndex] = newItem
 	}
-
-	return insertionIndex
 }
 
 // isOverPopulated checks if the node size is bigger than the size of a page.
@@ -316,7 +314,7 @@ func rotateRight(aNode, pNode, bNode *node, bNodeIndex int) {
 	pNodeItem := pNode.items[pNodeItemIndex]
 	pNode.items[pNodeItemIndex] = aNodeItem
 
-	bNode.items = append([]*item{pNodeItem}, bNode.items...)
+	bNode.items = append([]*Item{pNodeItem}, bNode.items...)
 
 	if !aNode.isLeaf() {
 		childNodeToShift := aNode.childNodes[len(aNode.childNodes)-1]

@@ -2,26 +2,57 @@ package engine
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+)
+
+const (
+	collectionSize = 16
 )
 
 var ErrWriteInsideReadTx = errors.New("can't perform a write operation inside a read transaction")
 
 // newCollection creates a new collection with given parameters.
-func newCollection(name []byte, root uint64) *collection {
-	return &collection{
+func newCollection(name []byte, root uint64) *Collection {
+	return &Collection{
 		name: name,
 		root: root,
 	}
 }
 
-// collection represents a named collection of key-value pairs.
-type collection struct {
-	dal  *dal
-	tx   *Transaction
-	name []byte
-	root uint64
+// Collection represents a named Collection of key-value pairs.
+type Collection struct {
+	dal     *dal
+	tx      *Transaction
+	name    []byte
+	root    uint64
+	counter uint64
+}
+
+func (c *Collection) serialize() *Item {
+	bytes := make([]byte, collectionSize)
+	leftPos := 0
+
+	binary.LittleEndian.PutUint64(bytes[leftPos:], c.root)
+
+	leftPos += pageNumberSize
+	binary.LittleEndian.PutUint64(bytes[leftPos:], c.counter)
+
+	return NewItem(c.name, bytes)
+}
+
+func (c *Collection) deserialize(item *Item) {
+	c.name = item.key
+
+	if len(item.value) != 0 {
+		leftPos := 0
+
+		c.root = binary.LittleEndian.Uint64(item.value[leftPos:])
+
+		leftPos += pageNumberSize
+		c.counter = binary.LittleEndian.Uint64(item.value[leftPos:])
+	}
 }
 
 // getNodes returns a list of nodes based on their indexes (the breadcrumbs) from the root.
@@ -33,7 +64,7 @@ type collection struct {
 //
 // c       d   e     f
 // For [0,1,0] -> p,b,e.
-func (c *collection) getNodes(indexes []int) ([]*node, error) {
+func (c *Collection) getNodes(indexes []int) ([]*node, error) {
 	root, err := c.dal.getNode(c.root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node: %w", err)
@@ -55,7 +86,7 @@ func (c *collection) getNodes(indexes []int) ([]*node, error) {
 }
 
 // Find Returns an item according based on the given key by performing a binary search.
-func (c *collection) Find(key []byte) (*item, error) {
+func (c *Collection) Find(key []byte) (*Item, error) {
 	n, err := c.dal.getNode(c.root)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node: %w", err)
@@ -77,19 +108,19 @@ func (c *collection) Find(key []byte) (*item, error) {
 // search, the ancestors are returned as well. This way we can iterate over them to check which nodes were modified and
 // rebalance by splitting them accordingly. If the root has too many items, then a new root of a new layer is
 // created and the created nodes from the split are added as children.
-func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclop
+func (c *Collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclop
 	if !c.tx.write {
 		return ErrWriteInsideReadTx
 	}
 
 	var (
-		newItem = newItem(key, value)
+		newItem = NewItem(key, value)
 		root    *node
 		err     error
 	)
 
 	if c.root == 0 {
-		root = c.tx.writeNode(c.dal.newNode([]*item{newItem}, []uint64{}))
+		root = c.tx.writeNode(c.dal.newNode([]*Item{newItem}, []uint64{}))
 		c.root = root.pageNumber
 
 		return nil
@@ -130,7 +161,7 @@ func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclo
 
 	rootNode := ancestors[0]
 	if rootNode.isOverPopulated() {
-		newRoot := c.dal.newNode([]*item{}, []uint64{rootNode.pageNumber})
+		newRoot := c.dal.newNode([]*Item{}, []uint64{rootNode.pageNumber})
 
 		newRoot.split(rootNode, 0)
 
@@ -142,12 +173,12 @@ func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclo
 	return nil
 }
 
-// remove removes a key from the tree. It finds the correct node and the index to remove the item from and removes it.
+// Remove removes a key from the tree. It finds the correct node and the index to Remove the item from and removes it.
 // When performing the search, the ancestors are returned as well. This way we can iterate over them to check which
 // nodes were modified and rebalance by rotating or merging the unbalanced nodes. Rotation is done first. If the
 // siblings don't have enough items, then merging occurs. If the root is without items after a split, then the root is
 // removed and the tree is one level shorter.
-func (c *collection) remove(key []byte) error { //nolint:cyclop
+func (c *Collection) Remove(key []byte) error { //nolint:cyclop
 	if !c.tx.write {
 		return ErrWriteInsideReadTx
 	}

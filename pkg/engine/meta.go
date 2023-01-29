@@ -3,10 +3,14 @@ package engine
 import "encoding/binary"
 
 const (
+	// magicNumber define the file type for this database.
+	magicNumber uint32 = 0xD00DB00D
 	// metaPageNumber defines the page number for the meta page.
 	metaPageNumber = uint64(0)
 	// metaPageNumber defines the size of a page number in bytes.
 	pageNumberSize = 8
+	// magicNumber defines the size of the magic number.
+	magicNumberSize = 4
 )
 
 // newEmptyMeta creates a new meta object.
@@ -28,6 +32,9 @@ type meta struct {
 func (m *meta) serialize(buffer []byte) {
 	pos := 0
 
+	binary.LittleEndian.PutUint32(buffer[pos:], magicNumber)
+	pos += magicNumberSize
+
 	binary.LittleEndian.PutUint64(buffer[pos:], m.rootPageNumber)
 
 	pos += pageNumberSize
@@ -35,11 +42,17 @@ func (m *meta) serialize(buffer []byte) {
 }
 
 // deserialize to given byte array.
-func (m *meta) deserialize(buf []byte) {
+func (m *meta) deserialize(buffer []byte) {
 	pos := 0
 
-	m.rootPageNumber = binary.LittleEndian.Uint64(buf[pos:])
+	magicNumberRes := binary.LittleEndian.Uint32(buffer[pos:])
+	if magicNumberRes != magicNumber {
+		panic("The file is not a db file")
+	}
+
+	pos += magicNumberSize
+	m.rootPageNumber = binary.LittleEndian.Uint64(buffer[pos:])
 
 	pos += pageNumberSize
-	m.freelistPageNumber = binary.LittleEndian.Uint64(buf[pos:])
+	m.freelistPageNumber = binary.LittleEndian.Uint64(buffer[pos:])
 }
