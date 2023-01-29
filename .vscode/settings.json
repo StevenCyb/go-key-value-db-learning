@@ -75,6 +75,7 @@
     "prealloc",
     "predeclared",
     "promlinter",
+    "rebalance",
     "rowserrcheck",
     "sqlclosecheck",
     "staticcheck",

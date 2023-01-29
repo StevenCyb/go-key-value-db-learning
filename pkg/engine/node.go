@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	byteOffset  = 1
-	int16Offset = 2
+	byteOffset     = 1
+	int16Offset    = 2
+	nodeHeaderSize = 3
 )
 
 // newItem creates a new item object with given key, value pairs.
@@ -25,6 +26,11 @@ type item struct {
 	value []byte
 }
 
+// size returns the size of the items in bytes.
+func (i item) size() int {
+	return len(i.key) + len(i.value)
+}
+
 // NewEmptyNode creates a new node object.
 func newEmptyNode() *node {
 	return &node{}
@@ -32,7 +38,7 @@ func newEmptyNode() *node {
 
 // node represents a node in a B-Tree.
 type node struct {
-	*DAL
+	dal        *DAL
 	childNodes []uint64
 	items      []*item
 	pageNumber uint64
@@ -137,19 +143,23 @@ func (n *node) deserialize(buffer []byte) {
 // findKey searches for a key inside the tree. Once the key is found, the parent node and the correct index are returned
 // so the key itself can be accessed in the following way parent[index].
 // If the key isn't found, a falsely answer is returned.
-func (n *node) findKey(key []byte) (int, *node, error) {
-	index, node, err := findKeyRecursively(n, key)
+func (n *node) findKey(key []byte, exact bool) (int, *node, []int, error) {
+	ancestorsIndexes := []int{0}
+
+	index, node, err := findKeyRecursively(n, key, exact, &ancestorsIndexes)
 	if err != nil {
-		return -1, nil, fmt.Errorf("failed to find key: %w", err)
+		return -1, nil, nil, fmt.Errorf("failed to find key: %w", err)
 	}
 
-	return index, node, nil
+	return index, node, ancestorsIndexes, nil
 }
 
 // findKeyRecursively recursively search for key as follows:
 // iterates all the items and finds the key. If the key is found, then the item is returned. If the key
 // isn't found then return the index where it should have been (the first index that key is greater than it's previous).
-func findKeyRecursively(node *node, key []byte) (int, *node, error) {
+func findKeyRecursively(
+	node *node, key []byte, exact bool, ancestorsIndexes *[]int,
+) (int, *node, error) {
 	wasFound := false
 	index := len(node.items)
 
@@ -170,13 +180,84 @@ func findKeyRecursively(node *node, key []byte) (int, *node, error) {
 	if wasFound {
 		return index, node, nil
 	} else if node.isLeaf() {
-		return -1, nil, nil
+		if exact {
+			return -1, nil, nil
+		}
+
+		return index, node, nil
 	}
 
-	nextChild, err := node.getNode(node.childNodes[index])
+	*ancestorsIndexes = append(*ancestorsIndexes, index)
+
+	nextChild, err := node.dal.getNode(node.childNodes[index])
 	if err != nil {
 		return -1, nil, fmt.Errorf("failed to get child node: %w", err)
 	}
 
-	return findKeyRecursively(nextChild, key)
+	return findKeyRecursively(nextChild, key, exact, ancestorsIndexes)
+}
+
+// nodeSize returns the node's size in bytes.
+func (n *node) size() int {
+	size := nodeHeaderSize
+	for _, item := range n.items {
+		size += item.size() + pageNumberSize
+	}
+
+	return size
+}
+
+func (n *node) addItem(newItem *item, insertionIndex int) int {
+	if len(n.items) == insertionIndex {
+		n.items = append(n.items, newItem)
+	} else {
+		n.items = append(n.items[:insertionIndex+1], n.items[insertionIndex:]...)
+		n.items[insertionIndex] = newItem
+	}
+
+	return insertionIndex
+}
+
+// isOverPopulated checks if the node size is bigger than the size of a page.
+func (n *node) isOverPopulated() bool {
+	return n.dal.isOverPopulated(n)
+}
+
+// isUnderPopulated checks if the node size is smaller than the size of a page.
+func (n *node) isUnderPopulated() bool {
+	return n.dal.isUnderPopulated(n)
+}
+
+func (n *node) split(nodeToSplit *node, nodeToSplitIndex int) error {
+	splitIndex := nodeToSplit.dal.getSplitIndex(nodeToSplit)
+	if splitIndex == -1 {
+		return nil
+	}
+
+	middleItem := nodeToSplit.items[splitIndex]
+	var newNode *node //nolint:wsl
+
+	if nodeToSplit.isLeaf() {
+		newNode, _ = n.dal.writeNode(n.dal.newNode(nodeToSplit.items[splitIndex+1:], []uint64{}))
+	} else {
+		newNode, _ = n.dal.writeNode(n.dal.newNode(nodeToSplit.items[splitIndex+1:], nodeToSplit.childNodes[splitIndex+1:]))
+		nodeToSplit.childNodes = nodeToSplit.childNodes[:splitIndex+1]
+	}
+
+	nodeToSplit.items = nodeToSplit.items[:splitIndex]
+
+	n.addItem(middleItem, nodeToSplitIndex)
+
+	if len(n.childNodes) == nodeToSplitIndex+1 {
+		n.childNodes = append(n.childNodes, newNode.pageNumber)
+	} else {
+		n.childNodes = append(n.childNodes[:nodeToSplitIndex+1], n.childNodes[nodeToSplitIndex:]...)
+		n.childNodes[nodeToSplitIndex+1] = newNode.pageNumber
+	}
+
+	if err := n.dal.writeNodes(n, nodeToSplit); err != nil {
+		return fmt.Errorf("failed to write nodes: %w", err)
+	}
+
+	return nil
 }

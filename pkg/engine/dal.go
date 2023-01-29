@@ -6,8 +6,12 @@ import (
 	"os"
 )
 
-// fileMode define read and write permissions for everyone.
-const fileMode = os.FileMode(0o666)
+const (
+	// fileMode define read and write permissions for everyone.
+	fileMode           = os.FileMode(0o666)
+	minNodeFillPercent = 0.5
+	maxNodeFillPercent = 0.95
+)
 
 // NewDal creates a new DAL for given file path.
 func NewDal(path string) (*DAL, error) {
@@ -99,10 +103,10 @@ func (d *DAL) readPage(number uint64) (*page, error) {
 }
 
 // writePage writes a page to file.
-func (d *DAL) writePage(p page) error {
-	offset := uint64(d.pageSize) * p.number
+func (d *DAL) writePage(pageToWrite page) error {
+	offset := uint64(d.pageSize) * pageToWrite.number
 
-	if _, err := d.file.WriteAt(p.data, int64(offset)); err != nil {
+	if _, err := d.file.WriteAt(pageToWrite.data, int64(offset)); err != nil {
 		return fmt.Errorf("failed to write file [%d:%d]: %w", offset, d.pageSize, err)
 	}
 
@@ -177,6 +181,18 @@ func (d *DAL) getNode(pageNumber uint64) (*node, error) {
 	return node, nil
 }
 
+// newNode creates a new node with given items and child nodes.
+func (d *DAL) newNode(items []*item, childNodes []uint64) *node {
+	newNode := newEmptyNode()
+
+	newNode.items = items
+	newNode.childNodes = childNodes
+	newNode.pageNumber = d.getNextPage()
+	newNode.dal = d
+
+	return newNode
+}
+
 // writeNode writes a node to file.
 func (d *DAL) writeNode(nodeToWrite *node) (*node, error) {
 	nodePage := d.allocateEmptyPage()
@@ -198,7 +214,45 @@ func (d *DAL) writeNode(nodeToWrite *node) (*node, error) {
 	return nodeToWrite, nil
 }
 
+// writeNodes writes all given nodes to file.
+func (d *DAL) writeNodes(nodesToWrite ...*node) error {
+	for i, nodeToWrite := range nodesToWrite {
+		if _, err := d.writeNode(nodeToWrite); err != nil {
+			return fmt.Errorf("failed to write nodes (on index %d): %w", i, err)
+		}
+	}
+
+	return nil
+}
+
 // deleteNode delete a node on page with given number.
 func (d *DAL) deleteNode(pageNumber uint64) {
 	d.releasePage(pageNumber)
+}
+
+// isOverPopulated returns if given node is over populated.
+func (d *DAL) isOverPopulated(givenNode *node) bool {
+	return float32(givenNode.size()) > maxNodeFillPercent*float32(d.pageSize)
+}
+
+// isUnderPopulated returns if given node is over under populated.
+func (d *DAL) isUnderPopulated(givenNode *node) bool {
+	return float32(givenNode.size()) < minNodeFillPercent*float32(d.pageSize)
+}
+
+// getSplitIndex should be called when performing rebalance after an item is removed. It checks if a node can spare an
+// element, and if it does then it returns the index when there the split should happen. Otherwise -1 is returned.
+func (d *DAL) getSplitIndex(givenNode *node) int {
+	size := 0
+	size += nodeHeaderSize
+
+	for index := range givenNode.items {
+		size += givenNode.items[index].size() + pageNumberSize
+
+		if float32(size) > (minNodeFillPercent*float32(d.pageSize)) && index < len(givenNode.items)-1 {
+			return index + 1
+		}
+	}
+
+	return -1
 }
