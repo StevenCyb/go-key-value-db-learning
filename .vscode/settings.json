@@ -30,6 +30,7 @@
     "exportloopref",
     "forbidigo",
     "forcetypeassert",
+    "freelist",
     "funlen",
     "gochecknoglobals",
     "gochecknoinits",
