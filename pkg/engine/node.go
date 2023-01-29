@@ -38,7 +38,8 @@ func newEmptyNode() *node {
 
 // node represents a node in a B-Tree.
 type node struct {
-	dal        *DAL
+	dal        *dal
+	tx         *Transaction
 	childNodes []uint64
 	items      []*item
 	pageNumber uint64
@@ -189,7 +190,7 @@ func findKeyRecursively(
 
 	*ancestorsIndexes = append(*ancestorsIndexes, index)
 
-	nextChild, err := node.dal.getNode(node.childNodes[index])
+	nextChild, err := node.tx.getNode(node.childNodes[index])
 	if err != nil {
 		return -1, nil, fmt.Errorf("failed to get child node: %w", err)
 	}
@@ -228,19 +229,19 @@ func (n *node) isUnderPopulated() bool {
 	return n.dal.isUnderPopulated(n)
 }
 
-func (n *node) split(nodeToSplit *node, nodeToSplitIndex int) error {
+func (n *node) split(nodeToSplit *node, nodeToSplitIndex int) {
 	splitIndex := nodeToSplit.dal.getSplitIndex(nodeToSplit)
 	if splitIndex == -1 {
-		return nil
+		return
 	}
 
 	middleItem := nodeToSplit.items[splitIndex]
 	var newNode *node //nolint:wsl
 
 	if nodeToSplit.isLeaf() {
-		newNode, _ = n.dal.writeNode(n.dal.newNode(nodeToSplit.items[splitIndex+1:], []uint64{}))
+		newNode = n.tx.writeNode(n.tx.newNode(nodeToSplit.items[splitIndex+1:], []uint64{}))
 	} else {
-		newNode, _ = n.dal.writeNode(n.dal.newNode(nodeToSplit.items[splitIndex+1:], nodeToSplit.childNodes[splitIndex+1:]))
+		newNode = n.tx.writeNode(n.tx.newNode(nodeToSplit.items[splitIndex+1:], nodeToSplit.childNodes[splitIndex+1:]))
 		nodeToSplit.childNodes = nodeToSplit.childNodes[:splitIndex+1]
 	}
 
@@ -255,22 +256,14 @@ func (n *node) split(nodeToSplit *node, nodeToSplitIndex int) error {
 		n.childNodes[nodeToSplitIndex+1] = newNode.pageNumber
 	}
 
-	if err := n.dal.writeNodes(n, nodeToSplit); err != nil {
-		return fmt.Errorf("failed to write nodes: %w", err)
-	}
-
-	return nil
+	n.tx.writeNodes(n, nodeToSplit)
 }
 
 // removeItemFromLeaf removes an item from a leaf node. It means there is no handling of child nodes.
-func (n *node) removeItemFromLeaf(index int) error {
+func (n *node) removeItemFromLeaf(index int) {
 	n.items = append(n.items[:index], n.items[index+1:]...)
 
-	if _, err := n.dal.writeNode(n); err != nil {
-		return fmt.Errorf("failed to write node: %w", err)
-	}
-
-	return nil
+	n.tx.writeNode(n)
 }
 
 // removeItemFromInternal take element before in order (The biggest element from the left branch), put it in the removed
@@ -280,7 +273,7 @@ func (n *node) removeItemFromInternal(index int) ([]int, error) {
 	affectedNodes := make([]int, 0)
 	affectedNodes = append(affectedNodes, index)
 
-	aNode, err := n.dal.getNode(n.childNodes[index])
+	aNode, err := n.tx.getNode(n.childNodes[index])
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node: %w", err)
 	}
@@ -288,7 +281,7 @@ func (n *node) removeItemFromInternal(index int) ([]int, error) {
 	for !aNode.isLeaf() {
 		traversingIndex := len(n.childNodes) - 1
 
-		aNode, err = aNode.dal.getNode(aNode.childNodes[traversingIndex])
+		aNode, err = aNode.tx.getNode(aNode.childNodes[traversingIndex])
 		if err != nil {
 			return nil, fmt.Errorf("failed to get node: %w", err)
 		}
@@ -299,9 +292,7 @@ func (n *node) removeItemFromInternal(index int) ([]int, error) {
 	n.items[index] = aNode.items[len(aNode.items)-1]
 	aNode.items = aNode.items[:len(aNode.items)-1]
 
-	if err := n.dal.writeNodes(n, aNode); err != nil {
-		return nil, fmt.Errorf("failed to write nodes: %w", err)
-	}
+	n.tx.writeNodes(n, aNode)
 
 	return affectedNodes, nil
 }
@@ -370,7 +361,7 @@ func rotateLeft(aNode, pNode, bNode *node, bNodeIndex int) {
  *     1,2    4   6,7                 1,2,3,4   6,7.
  */
 func (n *node) merge(bNode *node, bNodeIndex int) error {
-	aNode, err := n.dal.getNode(n.childNodes[bNodeIndex-1])
+	aNode, err := n.tx.getNode(n.childNodes[bNodeIndex-1])
 	if err != nil {
 		return fmt.Errorf("failed to get node: %w", err)
 	}
@@ -389,7 +380,7 @@ func (n *node) merge(bNode *node, bNodeIndex int) error {
 		return fmt.Errorf("failed to write node: %w", err)
 	}
 
-	n.dal.deleteNode(bNode.pageNumber)
+	n.tx.deleteNode(bNode)
 
 	return nil
 }
@@ -398,45 +389,39 @@ func (n *node) merge(bNode *node, bNodeIndex int) error {
 // left or by merging. First, the sibling nodes are checked to see if they have enough items for rebalancing
 // (>= minItems+1). If they don't have enough items, then merging with one of the sibling nodes occurs. This may leave
 // the parent unbalanced by having too little items so rebalancing has to be checked for all the ancestors.
-func (n *node) rebalanceRemove(unbalancedNode *node, unbalancedNodeIndex int) error { //nolint:cyclop
+func (n *node) rebalanceRemove(unbalancedNode *node, unbalancedNodeIndex int) error {
 	pNode := n
 
 	if unbalancedNodeIndex != 0 {
-		leftNode, err := n.dal.getNode(pNode.childNodes[unbalancedNodeIndex-1])
+		leftNode, err := n.tx.getNode(pNode.childNodes[unbalancedNodeIndex-1])
 		if err != nil {
 			return fmt.Errorf("failed to get node: %w", err)
 		}
 
 		if n.dal.getSplitIndex(leftNode) != -1 {
 			rotateRight(leftNode, pNode, unbalancedNode, unbalancedNodeIndex)
-
-			if err = n.dal.writeNodes(leftNode, pNode, unbalancedNode); err != nil {
-				return fmt.Errorf("failed to write node: %w", err)
-			}
+			n.tx.writeNodes(leftNode, pNode, unbalancedNode)
 
 			return nil
 		}
 	}
 
 	if unbalancedNodeIndex != len(pNode.childNodes)-1 {
-		rightNode, err := n.dal.getNode(pNode.childNodes[unbalancedNodeIndex+1])
+		rightNode, err := n.tx.getNode(pNode.childNodes[unbalancedNodeIndex+1])
 		if err != nil {
 			return fmt.Errorf("failed to get node: %w", err)
 		}
 
 		if n.dal.getSplitIndex(rightNode) != -1 {
 			rotateLeft(unbalancedNode, pNode, rightNode, unbalancedNodeIndex)
-
-			if err = n.dal.writeNodes(unbalancedNode, pNode, rightNode); err != nil {
-				return fmt.Errorf("failed to write node: %w", err)
-			}
+			n.tx.writeNodes(unbalancedNode, pNode, rightNode)
 
 			return nil
 		}
 	}
 
 	if unbalancedNodeIndex == 0 {
-		rightNode, err := n.dal.getNode(n.childNodes[unbalancedNodeIndex+1])
+		rightNode, err := n.tx.getNode(n.childNodes[unbalancedNodeIndex+1])
 		if err != nil {
 			return fmt.Errorf("failed to get node: %w", err)
 		}

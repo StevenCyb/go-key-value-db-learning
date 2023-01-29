@@ -79,6 +79,7 @@
     "rebalance",
     "rebalancing",
     "rowserrcheck",
+    "rwlock",
     "sqlclosecheck",
     "staticcheck",
     "stretchr",

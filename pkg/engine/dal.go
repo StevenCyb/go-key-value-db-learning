@@ -13,9 +13,9 @@ const (
 	maxNodeFillPercent = 0.95
 )
 
-// NewDal creates a new DAL for given file path.
-func NewDal(path string) (*DAL, error) {
-	dal := &DAL{
+// newDal creates a new DAL for given file path.
+func newDal(path string) (*dal, error) {
+	dal := &dal{
 		meta:     newEmptyMeta(),
 		freelist: newFreelist(),
 		pageSize: uint(os.Getpagesize()),
@@ -26,7 +26,7 @@ func NewDal(path string) (*DAL, error) {
 	case err == nil:
 		dal.file, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, fileMode)
 		if err != nil {
-			_ = dal.Close()
+			_ = dal.close()
 
 			return nil, fmt.Errorf("failed to open file: %w", err)
 		}
@@ -43,13 +43,13 @@ func NewDal(path string) (*DAL, error) {
 	case errors.Is(err, os.ErrNotExist):
 		dal.file, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, fileMode)
 		if err != nil {
-			_ = dal.Close()
+			_ = dal.close()
 
 			return nil, fmt.Errorf("failed to open file: %w", err)
 		}
 
 		dal.freelistPageNumber = dal.getNextPage()
-		if _, err = dal.writeFreelist(); err != nil {
+		if err = dal.writeFreelist(); err != nil {
 			return nil, err
 		}
 
@@ -64,8 +64,8 @@ func NewDal(path string) (*DAL, error) {
 	return dal, nil
 }
 
-// DAL is the Data Access Layer.
-type DAL struct {
+// dal is the Data Access Layer.
+type dal struct {
 	*meta
 	*freelist
 	file     *os.File
@@ -73,7 +73,7 @@ type DAL struct {
 }
 
 // Close closes the file.
-func (d *DAL) Close() error {
+func (d *dal) close() error {
 	if d.file == nil {
 		return nil
 	}
@@ -86,12 +86,12 @@ func (d *DAL) Close() error {
 }
 
 // allocateEmptyPage creates a new page object with specified page size.
-func (d *DAL) allocateEmptyPage() *page {
+func (d *dal) allocateEmptyPage() *page {
 	return newPage(d.pageSize)
 }
 
 // readPage reads a page with given number from file.
-func (d *DAL) readPage(number uint64) (*page, error) {
+func (d *dal) readPage(number uint64) (*page, error) {
 	allocatedPage := d.allocateEmptyPage()
 	offset := uint64(d.pageSize) * number
 
@@ -103,7 +103,7 @@ func (d *DAL) readPage(number uint64) (*page, error) {
 }
 
 // writePage writes a page to file.
-func (d *DAL) writePage(pageToWrite page) error {
+func (d *dal) writePage(pageToWrite page) error {
 	offset := uint64(d.pageSize) * pageToWrite.number
 
 	if _, err := d.file.WriteAt(pageToWrite.data, int64(offset)); err != nil {
@@ -114,7 +114,7 @@ func (d *DAL) writePage(pageToWrite page) error {
 }
 
 // writeMeta writes given metadata to first page.
-func (d *DAL) writeMeta(metadata meta) (*page, error) {
+func (d *dal) writeMeta(metadata meta) (*page, error) {
 	metaPage := d.allocateEmptyPage()
 	metaPage.number = metaPageNumber
 
@@ -128,7 +128,7 @@ func (d *DAL) writeMeta(metadata meta) (*page, error) {
 }
 
 // readMeta reads metadata from first page.
-func (d *DAL) readMeta() (*meta, error) {
+func (d *dal) readMeta() (*meta, error) {
 	metaPage, err := d.readPage(metaPageNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read metadata page from file: %w", err)
@@ -141,7 +141,7 @@ func (d *DAL) readMeta() (*meta, error) {
 }
 
 // readFreelist reads and deserializes the freelist page.
-func (d *DAL) readFreelist() (*freelist, error) {
+func (d *dal) readFreelist() (*freelist, error) {
 	freelistPage, err := d.readPage(d.freelistPageNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read freelist page from file: %w", err)
@@ -154,21 +154,21 @@ func (d *DAL) readFreelist() (*freelist, error) {
 }
 
 // writeFreelist serialized freelist and write to page.
-func (d *DAL) writeFreelist() (*page, error) {
+func (d *dal) writeFreelist() error {
 	freelistPage := d.allocateEmptyPage()
 	freelistPage.number = d.freelistPageNumber
 
 	d.freelist.serialize(freelistPage.data)
 
 	if err := d.writePage(*freelistPage); err != nil {
-		return nil, fmt.Errorf("failed to write freelist page to file: %w", err)
+		return fmt.Errorf("failed to write freelist page to file: %w", err)
 	}
 
-	return freelistPage, nil
+	return nil
 }
 
 // getNode returns a node with given page number.
-func (d *DAL) getNode(pageNumber uint64) (*node, error) {
+func (d *dal) getNode(pageNumber uint64) (*node, error) {
 	nodePage, err := d.readPage(pageNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read node page from page %d: %w", pageNumber, err)
@@ -182,7 +182,7 @@ func (d *DAL) getNode(pageNumber uint64) (*node, error) {
 }
 
 // newNode creates a new node with given items and child nodes.
-func (d *DAL) newNode(items []*item, childNodes []uint64) *node {
+func (d *dal) newNode(items []*item, childNodes []uint64) *node {
 	newNode := newEmptyNode()
 
 	newNode.items = items
@@ -194,7 +194,7 @@ func (d *DAL) newNode(items []*item, childNodes []uint64) *node {
 }
 
 // writeNode writes a node to file.
-func (d *DAL) writeNode(nodeToWrite *node) (*node, error) {
+func (d *dal) writeNode(nodeToWrite *node) error {
 	nodePage := d.allocateEmptyPage()
 
 	if nodeToWrite.pageNumber == 0 {
@@ -208,16 +208,16 @@ func (d *DAL) writeNode(nodeToWrite *node) (*node, error) {
 
 	err := d.writePage(*nodePage)
 	if err != nil {
-		return nil, fmt.Errorf("failed to write node page to file: %w", err)
+		return fmt.Errorf("failed to write node page to file: %w", err)
 	}
 
-	return nodeToWrite, nil
+	return nil
 }
 
 // writeNodes writes all given nodes to file.
-func (d *DAL) writeNodes(nodesToWrite ...*node) error {
+func (d *dal) writeNodes(nodesToWrite ...*node) error {
 	for i, nodeToWrite := range nodesToWrite {
-		if _, err := d.writeNode(nodeToWrite); err != nil {
+		if err := d.writeNode(nodeToWrite); err != nil {
 			return fmt.Errorf("failed to write nodes (on index %d): %w", i, err)
 		}
 	}
@@ -226,23 +226,23 @@ func (d *DAL) writeNodes(nodesToWrite ...*node) error {
 }
 
 // deleteNode delete a node on page with given number.
-func (d *DAL) deleteNode(pageNumber uint64) {
+func (d *dal) deleteNode(pageNumber uint64) {
 	d.releasePage(pageNumber)
 }
 
 // isOverPopulated returns if given node is over populated.
-func (d *DAL) isOverPopulated(givenNode *node) bool {
+func (d *dal) isOverPopulated(givenNode *node) bool {
 	return float32(givenNode.size()) > maxNodeFillPercent*float32(d.pageSize)
 }
 
 // isUnderPopulated returns if given node is over under populated.
-func (d *DAL) isUnderPopulated(givenNode *node) bool {
+func (d *dal) isUnderPopulated(givenNode *node) bool {
 	return float32(givenNode.size()) < minNodeFillPercent*float32(d.pageSize)
 }
 
 // getSplitIndex should be called when performing rebalance after an item is removed. It checks if a node can spare an
 // element, and if it does then it returns the index when there the split should happen. Otherwise -1 is returned.
-func (d *DAL) getSplitIndex(givenNode *node) int {
+func (d *dal) getSplitIndex(givenNode *node) int {
 	size := 0
 	size += nodeHeaderSize
 

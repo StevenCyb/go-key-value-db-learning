@@ -2,8 +2,11 @@ package engine
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 )
+
+var ErrWriteInsideReadTx = errors.New("can't perform a write operation inside a read transaction")
 
 // newCollection creates a new collection with given parameters.
 func newCollection(name []byte, root uint64) *collection {
@@ -15,7 +18,8 @@ func newCollection(name []byte, root uint64) *collection {
 
 // collection represents a named collection of key-value pairs.
 type collection struct {
-	dal  *DAL
+	dal  *dal
+	tx   *Transaction
 	name []byte
 	root uint64
 }
@@ -74,6 +78,10 @@ func (c *collection) Find(key []byte) (*item, error) {
 // rebalance by splitting them accordingly. If the root has too many items, then a new root of a new layer is
 // created and the created nodes from the split are added as children.
 func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclop
+	if !c.tx.write {
+		return ErrWriteInsideReadTx
+	}
+
 	var (
 		newItem = newItem(key, value)
 		root    *node
@@ -81,11 +89,7 @@ func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclo
 	)
 
 	if c.root == 0 {
-		root, err = c.dal.writeNode(c.dal.newNode([]*item{newItem}, []uint64{}))
-		if err != nil {
-			return err
-		}
-
+		root = c.tx.writeNode(c.dal.newNode([]*item{newItem}, []uint64{}))
 		c.root = root.pageNumber
 
 		return nil
@@ -107,10 +111,7 @@ func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclo
 		nodeToInsertIn.addItem(newItem, insertionIndex)
 	}
 
-	_, err = c.dal.writeNode(nodeToInsertIn)
-	if err != nil {
-		return err
-	}
+	c.tx.writeNode(nodeToInsertIn)
 
 	ancestors, err := c.getNodes(ancestorsIndexes)
 	if err != nil {
@@ -123,26 +124,17 @@ func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclo
 		nodeIndex := ancestorsIndexes[i+1]
 
 		if node.isOverPopulated() {
-			if err = pnode.split(node, nodeIndex); err != nil {
-				return err
-			}
+			pnode.split(node, nodeIndex)
 		}
 	}
 
-	// Handle root
 	rootNode := ancestors[0]
 	if rootNode.isOverPopulated() {
 		newRoot := c.dal.newNode([]*item{}, []uint64{rootNode.pageNumber})
 
-		if err = newRoot.split(rootNode, 0); err != nil {
-			return err
-		}
+		newRoot.split(rootNode, 0)
 
-		// commit newly created root
-		newRoot, err = c.dal.writeNode(newRoot)
-		if err != nil {
-			return err
-		}
+		newRoot = c.tx.writeNode(newRoot)
 
 		c.root = newRoot.pageNumber
 	}
@@ -150,12 +142,16 @@ func (c *collection) Put(key []byte, value []byte) error { //nolint:funlen,cyclo
 	return nil
 }
 
-// Remove removes a key from the tree. It finds the correct node and the index to remove the item from and removes it.
+// remove removes a key from the tree. It finds the correct node and the index to remove the item from and removes it.
 // When performing the search, the ancestors are returned as well. This way we can iterate over them to check which
 // nodes were modified and rebalance by rotating or merging the unbalanced nodes. Rotation is done first. If the
 // siblings don't have enough items, then merging occurs. If the root is without items after a split, then the root is
 // removed and the tree is one level shorter.
-func (c *collection) Remove(key []byte) error { //nolint:cyclop
+func (c *collection) remove(key []byte) error { //nolint:cyclop
+	if !c.tx.write {
+		return ErrWriteInsideReadTx
+	}
+
 	rootNode, err := c.dal.getNode(c.root)
 	if err != nil {
 		return fmt.Errorf("failed to get node: %w", err)
@@ -171,9 +167,7 @@ func (c *collection) Remove(key []byte) error { //nolint:cyclop
 	}
 
 	if nodeToRemoveFrom.isLeaf() {
-		if err = nodeToRemoveFrom.removeItemFromLeaf(removeItemIndex); err != nil {
-			return fmt.Errorf("failed to remove item from leaf: %w", err)
-		}
+		nodeToRemoveFrom.removeItemFromLeaf(removeItemIndex)
 	} else {
 		var affectedNodes []int
 
