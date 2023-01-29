@@ -1,8 +1,9 @@
 package main
 
 import (
-	"go-nosql-db/pkg/engine"
 	"os"
+
+	"go-nosql-db/pkg/engine"
 )
 
 func main() {

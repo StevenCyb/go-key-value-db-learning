@@ -7,7 +7,7 @@ import (
 
 // NewDal creates a new DAL for given file path.
 func NewDal(path string, pageSize uint) (*DAL, error) {
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o666)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}

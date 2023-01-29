@@ -11,8 +11,8 @@ func newFreelist(initialPage uint64) *freelist {
 // freelist helps to organize pages by tracing the last and freed pages.
 // This is important to reuse freed pages and to avoid fragmentation.
 type freelist struct {
-	maxPage       uint64
 	releasedPages []uint64
+	maxPage       uint64
 }
 
 // getNextPage returns a freed page number or a new one if no freed pages exist.
