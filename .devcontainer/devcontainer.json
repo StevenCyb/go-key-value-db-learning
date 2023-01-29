@@ -1,0 +1,24 @@
+{
+  "name": "Go",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "VARIANT": "1.19"
+    }
+  },
+  "settings": {
+    "go.toolsManagement.checkForUpdates": "local",
+    "go.useLanguageServer": true,
+    "go.gopath": "/go",
+    "go.goroot": "/usr/local/go",
+    "cSpell.diagnosticLevel": "Hint"
+  },
+  "extensions": [
+    "golang.Go",
+    "eamodio.gitlens",
+    "esbenp.prettier-vscode",
+    "streetsidesoftware.code-spell-checker",
+    "wayou.vscode-todo-highlight"
+  ],
+  "remoteUser": "vscode"
+}
